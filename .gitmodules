@@ -1,0 +1,3 @@
+[submodule "MTS_Mark_Metaprompting"]
+	path = MTS_Mark_Metaprompting
+	url = https://github.com/Kiberchaika/MTS_Mark_Metaprompting
