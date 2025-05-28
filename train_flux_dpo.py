@@ -794,11 +794,9 @@ def main(args):
         lora_target_modules = [module.strip() for module in args.lora_target_modules.split(",")]
 
     
-
-        # Fixed LoRA configuration - use rank for lora_alpha
     transformer_lora_config = LoraConfig(
         r=args.rank, 
-        lora_alpha=args.rank,  # Fixed: use rank instead of args.lora_alpha
+        lora_alpha=args.lora_alpha,  
         init_lora_weights="gaussian",
         target_modules=lora_target_modules, 
         lora_dropout=args.lora_dropout,
@@ -1187,6 +1185,34 @@ def main(args):
                     width=noisy_model_input_val.shape[3] * vae_scale_factor,
                     vae_scale_factor=vae_scale_factor,
                 )
+
+                # generate images from policy_pred_unpacked_val
+                if False and accelerator.is_main_process:
+                    logger.info("Generating images from policy predictions...")
+                    with torch.no_grad():
+                        # Create directory for saving policy-generated images
+                        policy_img_dir = os.path.join(args.output_dir, "policy_images", f"epoch_{epoch_val}")
+                        os.makedirs(policy_img_dir, exist_ok=True)
+                        
+                        # Process batches to avoid CUDA OOM errors
+                        for i in range(0, min(4, policy_pred_unpacked_val.shape[0])):  # Generate up to 4 images
+                            # Prepare latents for VAE decoding
+                            policy_latents = policy_pred_unpacked_val[i:i+1].detach()
+                            # Add latents to noisy input to get denoised prediction
+                            denoised_latents = noisy_model_input_val[i:i+1] - policy_pred_unpacked_val[i:i+1].detach() #denoised_latents = noisy_model_input_val[i:i+1] - policy_latents
+                            # Scale latents for VAE decoding
+                            denoised_latents = 1 / vae_scale * denoised_latents + vae_shift
+                            
+                            # Decode the latents to images
+                            policy_images = vae.decode(denoised_latents.to(dtype=vae.dtype)).sample
+                            
+                            # Convert to PIL and save
+                            policy_images = (policy_images / 2 + 0.5).clamp(0, 1)
+                            policy_images = policy_images.cpu().permute(0, 2, 3, 1).numpy() * 255
+                            policy_image = Image.fromarray(policy_images[0].astype(np.uint8))
+                            image_path = os.path.join(policy_img_dir, f"sample_{i}.png")
+                            policy_image.save(image_path)
+                            logger.info(f"Saved policy-generated image to {image_path}")
                 
                 policy_mse_val = F.mse_loss(policy_pred_unpacked_val.float(), flow_target_val.float(), reduction="none")
                 policy_mse_per_sample_val = policy_mse_val.mean(dim=list(range(1, len(policy_mse_val.shape))))

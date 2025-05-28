@@ -10,7 +10,7 @@ def create_similarity_report():
     service = FaceAnalysisService(silent=False)
     
     # Define the base path for validation images
-    base_path = '/workspace/flux-dpo-lora-output/validation_images'
+    base_path = 'flux-dpo-lora-output/validation_images'
     
     # Create lists to store generation numbers and similarity scores
     generations = []
@@ -89,6 +89,10 @@ def create_similarity_report():
     plt.plot(generations, scores_00, 'b-', label='Image 00')
     plt.plot(generations, scores_01, 'r-', label='Image 01')
     plt.plot(generations, scores_02, 'g-', label='Image 02')
+    
+    # Calculate and plot the average score line
+    avg_scores = [(s0 + s1 + s2) / 3 for s0, s1, s2 in zip(scores_00, scores_01, scores_02)]
+    plt.plot(generations, avg_scores, 'y-', linewidth=3, label='Average')
     
     plt.xlabel('Generation')
     plt.ylabel('Similarity Score')

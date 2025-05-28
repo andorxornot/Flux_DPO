@@ -9,3 +9,6 @@ diffusers
 transformers
 sentencepiece
 peft
+datasets
+wandb
+bitsandbytes

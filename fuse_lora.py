@@ -13,13 +13,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 
-import torch
+
 from diffusers import FluxPipeline
 
 # --- Minimal hardcoded arguments ---
 pretrained_model_id = "black-forest-labs/FLUX.1-dev"
-lora_path = "/workspace/models/my_first_flux_lora_v9_000008000.safetensors"
-output_dir_fused = "/workspace/models/fused_flux_full/"
+lora_path = "models/my_first_flux_lora_v9_000008000.safetensors"
+output_dir_fused = "models/fused_flux_full/"
 
 # 1. Load full pipeline
 pipe = FluxPipeline.from_pretrained(pretrained_model_id)

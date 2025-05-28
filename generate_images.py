@@ -6,9 +6,7 @@ import os
 import random
 
 # Initialize pipeline
-pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-dev", torch_dtype=torch.bfloat16)
-pipe.load_lora_weights("models/my_first_flux_lora_v9_000008000.safetensors")
-pipe.fuse_lora(lora_scale=1.0)
+pipe = FluxPipeline.from_pretrained("/workspace/Flux_DPO/models/fused_flux_full", torch_dtype=torch.bfloat16)
 pipe.to("cuda")
 
 def generate(
