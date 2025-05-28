@@ -67,7 +67,7 @@ if __name__ == "__main__":
                  "in black and white", "with motion blur"]
     
     
-    for i in range(100, 400):
+    for i in range(220, 400):
         prompts = []
     
         variation = random.choice(variations)

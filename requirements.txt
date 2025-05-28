@@ -5,3 +5,7 @@ pillow
 scikit-learn
 onnxruntime
 requests 
+diffusers
+transformers
+sentencepiece
+peft
