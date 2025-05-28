@@ -55,6 +55,53 @@ from diffusers.utils import check_min_version, convert_unet_state_dict_to_peft
 from diffusers.utils.torch_utils import is_compiled_module
 from diffusers.training_utils import cast_training_params, free_memory
 
+# Add EMA implementation
+class EMAModel:
+    """
+    Exponential Moving Average of models weights
+    """
+
+    def __init__(self, model, decay=0.9999):
+        """
+        Args:
+            model: model to apply EMA
+            decay: EMA decay factor
+        """
+        self.decay = decay
+        self.model = model
+        self.shadow = {}
+        self.backup = {}
+        self.register()
+
+    def register(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    def update(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                new_average = (1.0 - self.decay) * param.data + self.decay * self.shadow[name]
+                self.shadow[name] = new_average.clone()
+
+    def apply_shadow(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.backup[name] = param.data
+                param.data = self.shadow[name]
+
+    def restore(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad and name in self.backup:
+                param.data = self.backup[name]
+        self.backup = {}
+
+    def state_dict(self):
+        return self.shadow
+
+    def load_state_dict(self, state_dict):
+        self.shadow = state_dict
+
 # Configure logging to output to console
 logging.basicConfig(
     level=logging.INFO,
@@ -516,6 +563,18 @@ def parse_args(input_args=None):
         default="flux-dpo-lora-transformer-only",
         help=("The name of the tracker to report results to."),
     )
+    parser.add_argument(
+        "--use_ema",
+        action="store_true",
+        default=True,
+        help="Whether to use EMA model for final inference",
+    )
+    parser.add_argument(
+        "--ema_decay",
+        type=float,
+        default=0.99,
+        help="EMA decay factor",
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -815,6 +874,11 @@ def main(args):
                 output_dir_hook,
                 transformer_lora_layers=transformer_lora_layers_to_save_hook,
             )
+            
+            # Save EMA state if using EMA
+            if args.use_ema and ema_model is not None:
+                ema_state_dict = ema_model.state_dict()
+                torch.save(ema_state_dict, os.path.join(output_dir_hook, "ema_state.bin"))
 
     def load_model_hook(models_list, input_dir_hook):
         transformer_hook = None
@@ -847,6 +911,12 @@ def main(args):
             # Ensure LoRA params are in correct dtype after loading
             if args.mixed_precision == "fp16":
                 cast_training_params([transformer_hook], dtype=torch.float32)
+                
+        # Load EMA state if available
+        if args.use_ema and ema_model is not None and os.path.exists(os.path.join(input_dir_hook, "ema_state.bin")):
+            ema_state = torch.load(os.path.join(input_dir_hook, "ema_state.bin"))
+            ema_model.load_state_dict(ema_state)
+            logger.info("Loaded EMA state from checkpoint")
 
     accelerator.register_save_state_pre_hook(save_model_hook)
     accelerator.register_load_state_pre_hook(load_model_hook)
@@ -966,6 +1036,13 @@ def main(args):
     flux_transformer, optimizer, train_dataloader_obj, lr_scheduler_obj = accelerator.prepare(
         flux_transformer, optimizer, train_dataloader_obj, lr_scheduler_obj
     )
+
+    # Initialize EMA model after accelerator preparation
+    if args.use_ema:
+        ema_model = EMAModel(accelerator.unwrap_model(flux_transformer), decay=args.ema_decay)
+        logger.info(f"Using EMA with decay={args.ema_decay}")
+    else:
+        ema_model = None
 
     num_update_steps_per_epoch_val = math.ceil(len(train_dataloader_obj) / args.gradient_accumulation_steps)
     if overrode_max_train_steps_bool:
@@ -1164,6 +1241,10 @@ def main(args):
                 optimizer.step()
                 lr_scheduler_obj.step()
                 optimizer.zero_grad(set_to_none=True)
+                
+                # Update EMA model after optimizer step
+                if args.use_ema and ema_model is not None:
+                    ema_model.update()
 
             if accelerator.sync_gradients:
                 progress_bar_obj.update(1)
@@ -1197,10 +1278,21 @@ def main(args):
 
                     if args.run_validation and global_step_val % args.validation_steps == 0:
                         logger.info(f"\nRunning validation at step {global_step_val}...")
+                        
+                        # Use EMA model for validation if available
+                        if args.use_ema and ema_model is not None:
+                            logger.info("Using EMA model for validation")
+                            ema_model.apply_shadow()
+                            
                         log_validation(
                             args, flux_transformer, vae, all_text_encoders, all_tokenizers, 
                             accelerator, weight_dtype, epoch_val, step=global_step_val
                         )
+                        
+                        # Restore original model after validation if using EMA
+                        if args.use_ema and ema_model is not None:
+                            ema_model.restore()
+                            
                         # Make sure to return to training mode
                         flux_transformer.train()
                         logger.info("Validation completed. Resuming training...")
@@ -1225,11 +1317,22 @@ def main(args):
         flux_transformer_final_save = accelerator.unwrap_model(flux_transformer)
         flux_transformer_final_save = flux_transformer_final_save.to(torch.float32) 
         
+        # Apply EMA for final save if using EMA
+        if args.use_ema and ema_model is not None:
+            logger.info("Applying EMA for final model save")
+            ema_model.apply_shadow()
+            
         transformer_lora_final_sd = get_peft_model_state_dict(flux_transformer_final_save)
         FluxPipeline.save_lora_weights(
             save_directory=args.output_dir,
             transformer_lora_layers=transformer_lora_final_sd,
         )
+        
+        # Save final EMA state
+        if args.use_ema and ema_model is not None:
+            torch.save(ema_model.state_dict(), os.path.join(args.output_dir, "ema_final_state.bin"))
+            logger.info("Saved final EMA state")
+            
         logger.info(f"Saved final LoRA weights for transformer to {args.output_dir}")
 
         if args.run_validation:
@@ -1237,6 +1340,10 @@ def main(args):
                 args, flux_transformer, vae, all_text_encoders, all_tokenizers,
                 accelerator, weight_dtype, epoch_val, step=global_step_val, is_final_validation_run=True
             )
+            
+        # Restore original model after final validation if using EMA
+        if args.use_ema and ema_model is not None:
+            ema_model.restore()
 
         if args.push_to_hub:
             logger.info("Pushing model to hub...")

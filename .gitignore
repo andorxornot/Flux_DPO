@@ -134,7 +134,8 @@ cython_debug/
 # User-specific
 flux-dpo-lora-output/
 flux_dpo_dataset/ 
-images/
+dataset/
+dataset_simple/
 crop/
 
 
