@@ -128,9 +128,6 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
-# VSCode
-.vscode/
-
 # User-specific
 flux-dpo-lora-output/
 flux_dpo_dataset/ 
