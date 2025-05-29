@@ -5,7 +5,7 @@ from PIL import Image
 import os
 import base64
 from io import BytesIO
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 import json
 from sklearn.metrics.pairwise import cosine_similarity
 import pickle
@@ -31,15 +31,15 @@ class FaceAnalysisService:
             sys.stdout = open(os.devnull, 'w')
         
         try:
-            self.app = face_app.FaceAnalysis(providers=['CPUExecutionProvider'])
+            self.app = face_app.FaceAnalysis(providers=['CUDAExecutionProvider'])
             self.app.prepare(ctx_id=0, det_size=(640, 640))
         finally:
             if self.silent:
                 sys.stdout.close()
                 sys.stdout = original_stdout
         
-        # Cache for reference face embeddings
-        self.reference_embeddings = None
+        # Cache for reference face embeddings - now storing all embeddings
+        self.reference_embeddings = []
         self.reference_faces_processed = False
         
         # Load reference faces (from cache or process fresh)
@@ -54,7 +54,7 @@ class FaceAnalysisService:
             if self._load_from_cache():
                 if not self.silent:
                     print(f"✅ Loaded reference embeddings from cache")
-                    print(f"Reference embedding shape: {self.reference_embeddings.shape}")
+                    print(f"Number of reference embeddings: {len(self.reference_embeddings)}")
                 return
         
         # Process reference faces fresh
@@ -117,7 +117,7 @@ class FaceAnalysisService:
                 print(f"Warning: Reference face directory '{reference_dir}' not found")
             return
         
-        reference_embeddings = []
+        self.reference_embeddings = []
         processed_count = 0
         
         # Get all image files in reference directory
@@ -153,9 +153,15 @@ class FaceAnalysisService:
                 # Get the largest face (by bounding box area)
                 largest_face = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
                 
-                # Get embedding
-                embedding = largest_face.embedding
-                reference_embeddings.append(embedding)
+                # Skip if face alignment failed
+                if largest_face.embedding is None or largest_face.normed_embedding is None:
+                    if not self.silent:
+                        print(f"Warning: Face alignment failed for {filename}, skipping")
+                    continue
+                
+                # Use normed_embedding instead of embedding to ensure alignment is used
+                embedding = largest_face.normed_embedding
+                self.reference_embeddings.append(embedding)
                 
                 # Save cropped reference face for verification
                 face_crop = self._crop_face(img, largest_face.bbox)
@@ -172,9 +178,7 @@ class FaceAnalysisService:
                     print(f"Error processing {filename}: {str(e)}")
                 continue
         
-        if reference_embeddings:
-            # Calculate average embedding
-            self.reference_embeddings = np.mean(reference_embeddings, axis=0)
+        if self.reference_embeddings:
             self.reference_faces_processed = True
             
             # Save to cache
@@ -182,7 +186,7 @@ class FaceAnalysisService:
             
             if not self.silent:
                 print(f"Successfully processed {processed_count} reference faces")
-                print(f"Average reference embedding shape: {self.reference_embeddings.shape}")
+                print(f"Stored {len(self.reference_embeddings)} reference embeddings")
         else:
             if not self.silent:
                 print("Error: No reference faces could be processed")
@@ -223,7 +227,7 @@ class FaceAnalysisService:
     def analyze_face_in_image(self, img: np.ndarray, image_id: str) -> dict:
         """Analyze face in the given image and return results"""
         try:
-            if not self.reference_faces_processed:
+            if not self.reference_faces_processed or not self.reference_embeddings:
                 return {
                     "success": False,
                     "error": "Reference faces not properly loaded. Check reference_face/ directory."
@@ -242,6 +246,14 @@ class FaceAnalysisService:
             # Get the largest face (most prominent)
             largest_face = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
             
+            # Skip if face alignment failed
+            if largest_face.embedding is None or largest_face.normed_embedding is None:
+                return {
+                    "success": False,
+                    "error": "Face alignment failed for the detected face",
+                    "total_faces_detected": len(faces)
+                }
+            
             # Crop the face
             face_crop = self._crop_face(img, largest_face.bbox)
             
@@ -253,17 +265,25 @@ class FaceAnalysisService:
             # Encode face crop to base64
             face_crop_base64 = self._encode_image_to_base64(face_crop)
             
-            # Calculate similarity with reference embedding
-            face_embedding = largest_face.embedding
-            similarity_score = cosine_similarity(
+            # Use normed_embedding instead of embedding to ensure alignment is used
+            face_embedding = largest_face.normed_embedding
+            
+            # Calculate similarity with all reference embeddings
+            similarities = cosine_similarity(
                 [face_embedding], 
-                [self.reference_embeddings]
-            )[0][0]
+                self.reference_embeddings
+            )[0]
+            
+            # Get the highest similarity score
+            max_similarity = float(np.max(similarities))
+            max_similarity_index = int(np.argmax(similarities))
+            
+            score = np.mean(similarities)
             
             return {
                 "success": True,
                 "face_crop_base64": face_crop_base64,
-                "similarity_score": float(similarity_score),
+                "similarity_score": score,#similarities[max_similarity_index],
                 "crop_saved_path": crop_path,
                 "face_bbox": largest_face.bbox.tolist(),
                 "total_faces_detected": len(faces)
@@ -300,7 +320,7 @@ if __name__ == "__main__":
     
     if service.reference_faces_processed:
         print("✅ Service initialized successfully")
-        print(f"Reference embedding shape: {service.reference_embeddings.shape}")
+        print(f"Number of reference embeddings: {len(service.reference_embeddings)}")
         print("Check 'crop/' directory for reference face crops")
     else:
         print("❌ Service initialization failed - no reference faces processed") 

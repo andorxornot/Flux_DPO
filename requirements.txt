@@ -3,7 +3,7 @@ insightface
 numpy
 pillow
 scikit-learn
-onnxruntime
+onnxruntime-gpu
 requests 
 diffusers
 transformers

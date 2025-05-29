@@ -118,6 +118,9 @@ VALIDATION_PROMPTS = [
      "frontal a photo of ohwx man",
      "frontal a photo of ohwx man",
      "frontal a photo of ohwx man",
+     "frontal a photo of ohwx man",
+     "frontal a photo of ohwx man",
+     "frontal a photo of ohwx man",
 ]
 
 
