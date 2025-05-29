@@ -10,6 +10,10 @@ IMAGES_DIR = 'images2'
 DATASET_DIR = 'dataset2'
 
 def process_images():
+    # os make dirs
+    os.makedirs(f'{DATASET_DIR}/preferred_images', exist_ok=True)
+    os.makedirs(f'{DATASET_DIR}/less_preferred_images', exist_ok=True)
+
     # Initialize FaceAnalysisService
     service = FaceAnalysisService(silent=False)
     
@@ -86,6 +90,7 @@ def process_images():
             preferred_src = img1_path
             less_preferred_src = img0_path
             
+  
         # Copy images to dataset directories with new names
         shutil.copy2(preferred_src, f'{DATASET_DIR}/preferred_images/image{N}.jpg')
         shutil.copy2(less_preferred_src, f'{DATASET_DIR}/less_preferred_images/image{N}.jpg')

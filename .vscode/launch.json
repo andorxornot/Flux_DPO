@@ -32,7 +32,7 @@
             "justMyCode": false
         },
         { 
-            "name": "train flux dpo",
+            "name": "train flux dpo2",
             "type": "debugpy",
             "request": "launch",
             "program": "train_flux_dpo.py",
