@@ -11,7 +11,7 @@ def create_similarity_report(image_variants):
     
     # Define the base path for validation images
     base_path = '/workspace/Flux_DPO/flux-dpo-lora-output/validation_images'
-    
+      
     # Create lists to store generation numbers and similarity scores
     generations = []
     scores = [[] for _ in range(image_variants)]
@@ -98,6 +98,16 @@ def create_similarity_report(image_variants):
         
         plt.plot(generations, scores[i], '-', color=color, label=f'Image {i:02d}')
         plt.plot(generations, scores[i], 'o', color=color)  # Add markers
+        
+        # Add label for the last point if there are data points
+        if scores[i]:
+            last_score = scores[i][-1]
+            plt.annotate(f'Image {i:02d}', 
+                        xy=(generations[-1], last_score),
+                        xytext=(5, 0),
+                        textcoords='offset points',
+                        fontsize=9,
+                        color=color)
     
     # Calculate and plot the average score line
     if generations:
@@ -106,6 +116,16 @@ def create_similarity_report(image_variants):
             variant_scores = [scores[j][i] for j in range(image_variants)]
             avg_scores.append(sum(variant_scores) / len(variant_scores))
         plt.plot(generations, avg_scores, 'y-', linewidth=3, label='Average')
+        
+        # Add label for last point of average line
+        last_avg = avg_scores[-1]
+        plt.annotate('Average', 
+                    xy=(generations[-1], last_avg),
+                    xytext=(5, 0),
+                    textcoords='offset points',
+                    fontsize=9,
+                    color='yellow',
+                    fontweight='bold')
     
     plt.xlabel('Generation')
     plt.ylabel('Similarity Score')

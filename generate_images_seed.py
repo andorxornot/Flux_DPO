@@ -6,7 +6,7 @@ import os
 import random
 
 # Global constants
-IMAGE_DIR = "images2"
+IMAGE_DIR = "/workspace/Flux_DPO/images2"
 
 # Initialize pipeline
 pipe = FluxPipeline.from_pretrained("/workspace/Flux_DPO/models/fused_flux_full", torch_dtype=torch.bfloat16)
@@ -89,7 +89,7 @@ if __name__ == "__main__":
                  "in black and white", "with motion blur"]
     
     
-    for i in range(0, 400):
+    for i in range(400, 1400):
         prompts = []
     
         variation = random.choice(variations)
