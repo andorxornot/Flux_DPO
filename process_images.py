@@ -5,12 +5,16 @@ import glob
 import json
 import shutil
 
+# Global variables for directories
+IMAGES_DIR = 'images2'
+DATASET_DIR = 'dataset2'
+
 def process_images():
     # Initialize FaceAnalysisService
     service = FaceAnalysisService(silent=False)
     
     # Get list of all image pairs and text files
-    image_files = glob.glob('images/img_*_00.jpg')
+    image_files = glob.glob(f'{IMAGES_DIR}/img_*_00.jpg')
     
     # Initialize captions dictionary
     captions = {}
@@ -21,8 +25,8 @@ def process_images():
         N = int(base_name.split('_')[1])
         
         # Construct paths for the second image and text file
-        img1_path = f'images/img_{N:02d}_01.jpg'
-        txt_path = f'images/img_{N:02d}.txt'
+        img1_path = f'{IMAGES_DIR}/img_{N:02d}_01.jpg'
+        txt_path = f'{IMAGES_DIR}/img_{N:02d}.txt'
         
         # Check if all required files exist
         if not all(os.path.exists(f) for f in [img0_path, img1_path, txt_path]):
@@ -83,14 +87,14 @@ def process_images():
             less_preferred_src = img0_path
             
         # Copy images to dataset directories with new names
-        shutil.copy2(preferred_src, f'dataset/preferred_images/image{N}.jpg')
-        shutil.copy2(less_preferred_src, f'dataset/less_preferred_images/image{N}.jpg')
+        shutil.copy2(preferred_src, f'{DATASET_DIR}/preferred_images/image{N}.jpg')
+        shutil.copy2(less_preferred_src, f'{DATASET_DIR}/less_preferred_images/image{N}.jpg')
     
     # Save captions to JSON file
-    with open('dataset/captions.json', 'w') as f:
+    with open(f'{DATASET_DIR}/captions.json', 'w') as f:
         json.dump(captions, f, indent=4)
         
-    print("\nProcessing complete. Dataset saved in 'dataset' directory.")
+    print(f"\nProcessing complete. Dataset saved in '{DATASET_DIR}' directory.")
 
 if __name__ == "__main__":
     process_images() 
