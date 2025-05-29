@@ -975,17 +975,18 @@ def main(args):
         
         processed_w_tensors, processed_l_tensors = [], []
         for img_w_item, img_l_item in zip(images_w_pil, images_l_pil):
-            # Process img_w
+
             img_w_p = train_resize_transform(img_w_item)
+            img_l_p = train_resize_transform(img_l_item)
+
             if not args.no_hflip and random.random() < 0.5: 
                 img_w_p = train_flip_transform(img_w_p)
-            img_w_p = train_crop_transform(img_w_p)
-            processed_w_tensors.append(normalize_transform(to_tensor_transform(img_w_p)))
-            # Process img_l
-            img_l_p = train_resize_transform(img_l_item)
-            if not args.no_hflip and random.random() < 0.5: 
                 img_l_p = train_flip_transform(img_l_p)
+
+            img_w_p = train_crop_transform(img_w_p)
             img_l_p = train_crop_transform(img_l_p)
+
+            processed_w_tensors.append(normalize_transform(to_tensor_transform(img_w_p)))
             processed_l_tensors.append(normalize_transform(to_tensor_transform(img_l_p)))
         
         examples_dict["pixel_values_w"] = processed_w_tensors

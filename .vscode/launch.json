@@ -65,7 +65,7 @@
                 "--ema_decay", "0.995",
                 "--from_prc_timestep", "0.1",
                 "--to_prc_timestep", "0.85",
-                "--no_hflip",
+                //"--no_hflip",
                 //"--use_8bit_adam",
                 //"--allow_tf32",
                 //"--load_lora", "models/my_first_flux_lora_v9_000008000.safetensors",
