@@ -50,10 +50,116 @@ from diffusers import (
     FluxPipeline,
     FluxTransformer2DModel,
 )
-from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, convert_unet_state_dict_to_peft
 from diffusers.utils.torch_utils import is_compiled_module
 from diffusers.training_utils import cast_training_params, free_memory
+
+# Custom scheduler implementation
+def get_scheduler(
+    name,
+    optimizer,
+    num_warmup_steps=0,
+    num_training_steps=0,
+    num_cycles=1,
+    power=1.0,
+):
+    """
+    Create a learning rate scheduler based on the specified name.
+    
+    Args:
+        name: The name of the scheduler.
+        optimizer: The optimizer to use with the scheduler.
+        num_warmup_steps: Number of steps for warm-up.
+        num_training_steps: Total number of training steps.
+        num_cycles: Number of cycles for certain schedulers.
+        power: Power factor for polynomial scheduler.
+        
+    Returns:
+        A scheduler object.
+    """
+    name = name.lower()
+    
+    if name == "linear":
+        return transformers.get_linear_schedule_with_warmup(
+            optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps
+        )
+    elif name == "cosine":
+        return transformers.get_cosine_schedule_with_warmup(
+            optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps
+        )
+    elif name == "cosine_with_restarts":
+        return transformers.get_cosine_with_hard_restarts_schedule_with_warmup(
+            optimizer, 
+            num_warmup_steps=num_warmup_steps, 
+            num_training_steps=num_training_steps, 
+            num_cycles=num_cycles
+        )
+    elif name == "polynomial":
+        return transformers.get_polynomial_decay_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=num_warmup_steps,
+            num_training_steps=num_training_steps,
+            power=power,
+        )
+    elif name == "constant":
+        return transformers.get_constant_schedule(optimizer)
+    elif name == "constant_with_warmup":
+        return transformers.get_constant_schedule_with_warmup(
+            optimizer, num_warmup_steps=num_warmup_steps
+        )
+    elif name == "cosine_annealing":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=num_training_steps
+        )
+    elif name == "one_cycle":
+        return torch.optim.lr_scheduler.OneCycleLR(
+            optimizer, 
+            max_lr=optimizer.param_groups[0]['lr'],
+            total_steps=num_training_steps,
+            pct_start=0.3  # 30% of steps are used for warmup
+        )
+    elif name == "cosine_with_warmup_restarts":
+        # Custom scheduler that combines warmup with cosine restarts
+        # First does warmup, then does cosine annealing with restarts
+        class CosineWithWarmupRestarts(torch.optim.lr_scheduler._LRScheduler):
+            def __init__(self, optimizer, warmup_steps, total_steps, cycles, last_epoch=-1):
+                self.warmup_steps = warmup_steps
+                self.total_steps = total_steps
+                self.cycles = cycles
+                self.cycle_length = (total_steps - warmup_steps) // cycles
+                self.step_size = self.cycle_length // 2
+                super().__init__(optimizer, last_epoch)
+            
+            def get_lr(self):
+                if self.last_epoch < self.warmup_steps:
+                    # Linear warmup
+                    return [base_lr * (self.last_epoch / self.warmup_steps) for base_lr in self.base_lrs]
+                else:
+                    # Cosine annealing with restarts
+                    step_after_warmup = self.last_epoch - self.warmup_steps
+                    cycle = step_after_warmup // self.cycle_length
+                    cycle_step = step_after_warmup % self.cycle_length
+                    
+                    # Calculate cosine value (0 to 1 and back to 0 within each cycle)
+                    cosine_val = 0.5 * (1 + math.cos(math.pi * cycle_step / self.cycle_length))
+                    
+                    # Adjust based on which cycle we're in (optional: make each cycle's max lr smaller)
+                    cycle_factor = 1.0  # Can be reduced for later cycles: 1.0 / (1 + cycle)
+                    
+                    return [base_lr * cosine_val * cycle_factor for base_lr in self.base_lrs]
+        
+        return CosineWithWarmupRestarts(
+            optimizer,
+            warmup_steps=num_warmup_steps,
+            total_steps=num_training_steps,
+            cycles=num_cycles
+        )
+    else:
+        raise ValueError(
+            f"Unknown scheduler: {name}. Available options are: "
+            "linear, cosine, cosine_with_restarts, polynomial, constant, constant_with_warmup, "
+            "cosine_annealing, one_cycle, cosine_with_warmup_restarts"
+        )
 
 # Add EMA implementation
 class EMAModel:
@@ -437,14 +543,17 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--lr_scheduler",
         type=str,
-        default="constant",
+        default="cosine",
         help=(
             'The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
-            ' "constant", "constant_with_warmup"]'
+            ' "constant", "constant_with_warmup", "cosine_annealing", "one_cycle", "cosine_with_warmup_restarts"]'
         ),
     )
     parser.add_argument(
-        "--lr_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
+        "--lr_warmup_steps", 
+        type=int, 
+        default=50,  # Increased from 0 to 500 for better warmup with cosine scheduler
+        help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument(
         "--lr_num_cycles",
@@ -569,7 +678,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--use_ema",
         action="store_true",
-        default=True,
+        default=False,
         help="Whether to use EMA model for final inference",
     )
     parser.add_argument(
@@ -638,6 +747,46 @@ def encode_prompt_flux(text_encoder_list, prompt_text_inputs_list, device_val, n
     text_ids = torch.zeros(seq_len, 3, device=device_val, dtype=prompt_embeds.dtype)
 
     return prompt_embeds, pooled_prompt_embeds, text_ids
+
+
+def plot_lr_schedule(scheduler, num_training_steps, output_file="lr_schedule.png"):
+    """
+    Plot the learning rate schedule and save it to a file.
+    
+    Args:
+        scheduler: The learning rate scheduler
+        num_training_steps: Total number of training steps
+        output_file: Path to save the plot
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import copy
+        
+        # Make a deep copy of the scheduler to avoid affecting the actual training
+        temp_scheduler = copy.deepcopy(scheduler)
+        
+        # Extract learning rates at each step
+        lrs = []
+        for i in range(num_training_steps):
+            lrs.append(temp_scheduler.get_last_lr()[0])
+            temp_scheduler.step()
+        
+        # Create the plot
+        plt.figure(figsize=(10, 5))
+        plt.plot(lrs)
+        plt.xlabel('Training Steps')
+        plt.ylabel('Learning Rate')
+        plt.title('Learning Rate Schedule')
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_file)
+        plt.close()
+        
+        logger.info(f"Learning rate schedule plot saved to {output_file}")
+    except ImportError:
+        logger.warning("matplotlib not installed, skipping learning rate schedule plot")
+    except Exception as e:
+        logger.warning(f"Failed to plot learning rate schedule: {e}")
 
 
 def main(args):
@@ -797,9 +946,11 @@ def main(args):
         lora_target_modules = [module.strip() for module in args.lora_target_modules.split(",")]
 
     
+
+        # Fixed LoRA configuration - use rank for lora_alpha
     transformer_lora_config = LoraConfig(
         r=args.rank, 
-        lora_alpha=args.lora_alpha,  
+        lora_alpha=args.rank,  # Fixed: use rank instead of args.lora_alpha
         init_lora_weights="gaussian",
         target_modules=lora_target_modules, 
         lora_dropout=args.lora_dropout,
@@ -978,18 +1129,17 @@ def main(args):
         
         processed_w_tensors, processed_l_tensors = [], []
         for img_w_item, img_l_item in zip(images_w_pil, images_l_pil):
-
+            # Process img_w
             img_w_p = train_resize_transform(img_w_item)
-            img_l_p = train_resize_transform(img_l_item)
-
             if not args.no_hflip and random.random() < 0.5: 
                 img_w_p = train_flip_transform(img_w_p)
-                img_l_p = train_flip_transform(img_l_p)
-
             img_w_p = train_crop_transform(img_w_p)
-            img_l_p = train_crop_transform(img_l_p)
-
             processed_w_tensors.append(normalize_transform(to_tensor_transform(img_w_p)))
+            # Process img_l
+            img_l_p = train_resize_transform(img_l_item)
+            if not args.no_hflip and random.random() < 0.5: 
+                img_l_p = train_flip_transform(img_l_p)
+            img_l_p = train_crop_transform(img_l_p)
             processed_l_tensors.append(normalize_transform(to_tensor_transform(img_l_p)))
         
         examples_dict["pixel_values_w"] = processed_w_tensors
@@ -1035,6 +1185,20 @@ def main(args):
         num_cycles=args.lr_num_cycles, power=args.lr_power,
     )
 
+    # Plot the learning rate schedule if in main process
+    if accelerator.is_main_process:
+        # Create a copy of the scheduler for plotting to avoid affecting the actual training
+        plot_scheduler = get_scheduler(
+            args.lr_scheduler, 
+            optimizer=optimizer_class_adam([torch.nn.Parameter(torch.tensor([0.0]))], lr=args.learning_rate),
+            num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
+            num_training_steps=args.max_train_steps * accelerator.num_processes,
+            num_cycles=args.lr_num_cycles, 
+            power=args.lr_power,
+        )
+        os.makedirs(args.output_dir, exist_ok=True)
+        plot_lr_schedule(plot_scheduler, args.max_train_steps, output_file=os.path.join(args.output_dir, "lr_schedule.png"))
+    
     flux_transformer, optimizer, train_dataloader_obj, lr_scheduler_obj = accelerator.prepare(
         flux_transformer, optimizer, train_dataloader_obj, lr_scheduler_obj
     )
@@ -1132,7 +1296,19 @@ def main(args):
                 bsz_pairs_val = batch_dict["input_ids_one"].shape[0]
                 noise_single_val = torch.randn_like(latents_in[:bsz_pairs_val])
                 noise_val = noise_single_val.repeat(2, 1, 1, 1)
+
+                # test independent noise
+                noise_val = torch.randn_like(latents_in)
                 
+
+
+
+
+
+
+
+
+
                 # Use the timestep range arguments to limit training to specific portions of the diffusion process
                 min_timestep = int(args.from_prc_timestep * (noise_scheduler.config.num_train_timesteps - 1))
                 max_timestep = int(args.to_prc_timestep * (noise_scheduler.config.num_train_timesteps - 1))
@@ -1162,10 +1338,11 @@ def main(args):
                 )
                 flow_target_val = noise_val - latents_in
 
-                unconditional_guidance_scale = 0.0
+                # random guidance scale
+                guidance_scale = random.uniform(0.0, 1.5) #3.5 # random.uniform(3.5, 4.0)
                 guidance_input = torch.full(
                     (timesteps_val.shape[0],),
-                    unconditional_guidance_scale,
+                    guidance_scale,
                     device=accelerator.device,
                     dtype=weight_dtype 
                 )
@@ -1189,35 +1366,10 @@ def main(args):
                     width=noisy_model_input_val.shape[3] * vae_scale_factor,
                     vae_scale_factor=vae_scale_factor,
                 )
-
-                # generate images from policy_pred_unpacked_val
-                if False and accelerator.is_main_process:
-                    logger.info("Generating images from policy predictions...")
-                    with torch.no_grad():
-                        # Create directory for saving policy-generated images
-                        policy_img_dir = os.path.join(args.output_dir, "policy_images", f"epoch_{epoch_val}")
-                        os.makedirs(policy_img_dir, exist_ok=True)
-                        
-                        # Process batches to avoid CUDA OOM errors
-                        for i in range(0, min(4, policy_pred_unpacked_val.shape[0])):  # Generate up to 4 images
-                            # Prepare latents for VAE decoding
-                            policy_latents = policy_pred_unpacked_val[i:i+1].detach()
-                            # Add latents to noisy input to get denoised prediction
-                            denoised_latents = noisy_model_input_val[i:i+1] - policy_pred_unpacked_val[i:i+1].detach() #denoised_latents = noisy_model_input_val[i:i+1] - policy_latents
-                            # Scale latents for VAE decoding
-                            denoised_latents = 1 / vae_scale * denoised_latents + vae_shift
-                            
-                            # Decode the latents to images
-                            policy_images = vae.decode(denoised_latents.to(dtype=vae.dtype)).sample
-                            
-                            # Convert to PIL and save
-                            policy_images = (policy_images / 2 + 0.5).clamp(0, 1)
-                            policy_images = policy_images.cpu().permute(0, 2, 3, 1).numpy() * 255
-                            policy_image = Image.fromarray(policy_images[0].astype(np.uint8))
-                            image_path = os.path.join(policy_img_dir, f"sample_{i}.png")
-                            policy_image.save(image_path)
-                            logger.info(f"Saved policy-generated image to {image_path}")
                 
+
+                
+
                 policy_mse_val = F.mse_loss(policy_pred_unpacked_val.float(), flow_target_val.float(), reduction="none")
                 policy_mse_per_sample_val = policy_mse_val.mean(dim=list(range(1, len(policy_mse_val.shape))))
                 policy_log_probs_w_val, policy_log_probs_l_val = (-policy_mse_per_sample_val).chunk(2)

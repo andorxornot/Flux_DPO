@@ -10,7 +10,7 @@ def create_similarity_report(image_variants):
     service = FaceAnalysisService(silent=False)
     
     # Define the base path for validation images
-    base_path = '/workspace/Flux_DPO/flux-dpo-lora-output/validation_images'
+    base_path = '/workspace/Flux_DPO/flux-dpo-v2-output/validation_images'
       
     # Create lists to store generation numbers and similarity scores
     generations = []
